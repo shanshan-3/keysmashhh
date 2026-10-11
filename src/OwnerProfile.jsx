@@ -21,7 +21,7 @@ export default function OwnerProfile({
   freshRun,
 }) {
   const { state, retry } = useProfileDashboard(null, user.id, freshRun);
-  const profile = state.profile === null ? emptyProfile : state.profile;
+  const profile = state.profile ?? emptyProfile;
 
   const controls = (
     <PublicProfileControls user={user} onProfileChange={onProfileChange} />
