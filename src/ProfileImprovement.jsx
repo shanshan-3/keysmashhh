@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import LineChart, { chartScales } from "./LineChart.jsx";
 import { formatMode } from "./history.js";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -17,33 +18,26 @@ function currentUtcWeek() {
 
 export default function ProfileImprovement({ modes, trends }) {
   const id = useId();
-  const container = useRef(null);
-  const [width, setWidth] = useState(800);
   const [chosenMode, setChosenMode] = useState("");
   const [weeks, setWeeks] = useState(12);
-  useEffect(() => {
-    const observer = new ResizeObserver(([entry]) =>
-      setWidth(Math.max(240, Math.round(entry.contentRect.width))),
-    );
-    observer.observe(container.current);
-    return () => observer.disconnect();
-  }, []);
   const mode =
     modes.find((record) => record.mode === chosenMode)?.mode ||
     modes[0]?.mode ||
     "";
-  const values = new Map(
-    (trends || [])
-      .filter((entry) => entry.mode === mode)
-      .map((entry) => [entry.week_start, entry]),
-  );
   const currentWeek = currentUtcWeek();
-  const buckets = Array.from({ length: weeks }, (_, index) => {
-    const week = new Date(currentWeek - (weeks - index - 1) * WEEK_MS)
-      .toISOString()
-      .slice(0, 10);
-    return { week, value: values.get(week) };
-  });
+  const buckets = useMemo(() => {
+    const values = new Map(
+      (trends || [])
+        .filter((entry) => entry.mode === mode)
+        .map((entry) => [entry.week_start, entry]),
+    );
+    return Array.from({ length: weeks }, (_, index) => {
+      const week = new Date(currentWeek - (weeks - index - 1) * WEEK_MS)
+        .toISOString()
+        .slice(0, 10);
+      return { week, value: values.get(week) };
+    });
+  }, [trends, mode, weeks, currentWeek]);
   const measured = buckets.filter((bucket) => bucket.value);
   const latest = buckets.findLastIndex((bucket) => bucket.value);
   const ceiling = Math.max(
@@ -55,30 +49,48 @@ export default function ProfileImprovement({ modes, trends }) {
       ) / 10,
     ) * 10,
   );
-  const right = width - 24;
-  const x = (index) => 56 + (index / (weeks - 1)) * (right - 56);
-  const y = (wpm) => 224 - (Number(wpm) / ceiling) * 192;
-  const paths = [];
-  let path = "";
-  buckets.forEach((bucket, index) => {
-    if (!bucket.value) {
-      if (path) paths.push(path);
-      path = "";
-      return;
-    }
-    path += path
-      ? ` H ${x(index)} V ${y(bucket.value.average_wpm)}`
-      : `M ${x(index)} ${y(bucket.value.average_wpm)}`;
-  });
-  if (path) paths.push(path);
+  const data = useMemo(() => {
+    const palette = getComputedStyle(document.documentElement);
+    const ink = palette.getPropertyValue("--ink").trim();
+    const accent = palette.getPropertyValue("--accent").trim();
+    return {
+      labels: buckets.map((bucket) => bucket.week),
+      datasets: [
+        {
+          label: "Weekly average",
+          data: buckets.map((bucket) =>
+            bucket.value ? Number(bucket.value.average_wpm) : null,
+          ),
+          stepped: "before",
+          spanGaps: false,
+          borderWidth: 2,
+          pointStyle: "rect",
+          pointRadius: buckets.map((_, index) => (index === latest ? 5 : 3)),
+          pointBackgroundColor: buckets.map((_, index) =>
+            index === latest ? accent : ink,
+          ),
+          pointBorderColor: ink,
+          pointBorderWidth: 1,
+        },
+      ],
+    };
+  }, [buckets, latest]);
+  const scales = useMemo(
+    () => chartScales({ type: "category" }, ceiling),
+    [ceiling],
+  );
+  const tooltip = useMemo(
+    () => ({
+      title: (items) => `Week starting ${items[0]?.label} (UTC)`,
+      label: (item) =>
+        `${item.parsed.y} WPM / ${buckets[item.dataIndex].value?.run_count ?? 0} runs`,
+    }),
+    [buckets],
+  );
   const range = ranges.find((entry) => entry.weeks === weeks).label;
 
   return (
-    <section
-      className="profile-improvement"
-      ref={container}
-      aria-labelledby={`${id}-heading`}
-    >
+    <section className="profile-improvement" aria-labelledby={`${id}-heading`}>
       <div className="section-heading">
         <h2 id={`${id}-heading`}>Weekly average WPM.</h2>
         <p>Compare one practiced mode at a time.</p>
@@ -136,71 +148,14 @@ export default function ProfileImprovement({ modes, trends }) {
               range or another practiced mode.
             </p>
           ) : (
-            <>
-              <svg
-                className="improvement-chart"
-                viewBox={`0 0 ${width} 272`}
-                role="img"
-                aria-labelledby={`${id}-chart-title ${id}-chart-description`}
-              >
-                <title id={`${id}-chart-title`}>
-                  {formatMode(mode)} weekly average WPM over {range}
-                </title>
-                <desc id={`${id}-chart-description`}>
-                  Black steps and square points show measured weeks. Gaps
-                  indicate weeks without runs. Yellow marks the latest measured
-                  week. Exact values are in the weekly data table below.
-                </desc>
-                <g aria-hidden="true">
-                  {[0, ceiling / 2, ceiling].map((value) => (
-                    <g key={value}>
-                      <line
-                        className="improvement-grid"
-                        x1="56"
-                        x2={right}
-                        y1={y(value)}
-                        y2={y(value)}
-                      />
-                      <text x="44" y={y(value) + 5} textAnchor="end">
-                        {value}
-                      </text>
-                    </g>
-                  ))}
-                  <text x="56" y="18">
-                    WPM
-                  </text>
-                  <text x="56" y="256">
-                    {buckets[0].week}
-                  </text>
-                  <text x={right} y="256" textAnchor="end">
-                    {buckets.at(-1).week}
-                  </text>
-                  {paths.map((d, index) => (
-                    <path key={index} className="improvement-line" d={d} />
-                  ))}
-                  {buckets.map(
-                    (bucket, index) =>
-                      bucket.value && (
-                        <rect
-                          key={bucket.week}
-                          className={
-                            index === latest
-                              ? "improvement-point latest"
-                              : "improvement-point"
-                          }
-                          x={x(index) - (index === latest ? 5 : 3)}
-                          y={
-                            y(bucket.value.average_wpm) -
-                            (index === latest ? 5 : 3)
-                          }
-                          width={index === latest ? 10 : 6}
-                          height={index === latest ? 10 : 6}
-                        />
-                      ),
-                  )}
-                </g>
-              </svg>
-            </>
+            <LineChart
+              className="improvement-chart"
+              height={272}
+              data={data}
+              scales={scales}
+              tooltip={tooltip}
+              label={`${formatMode(mode)} weekly average WPM over ${range}. Black steps and square points show measured weeks. Gaps indicate weeks without runs. Yellow marks the latest measured week. Exact values are in the weekly data table below.`}
+            />
           )}
           <details className="improvement-data">
             <summary>View weekly data</summary>

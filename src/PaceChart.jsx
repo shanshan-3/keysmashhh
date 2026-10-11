@@ -1,111 +1,105 @@
-import { useEffect, useRef } from "react";
+import { useMemo } from "react";
+import LineChart, { chartScales } from "./LineChart.jsx";
+
+const EMPTY = [];
 
 export default function PaceChart({
-  samples = [],
-  comparison = [],
+  samples = EMPTY,
+  comparison = EMPTY,
   label = "WPM over time",
   kind = "pace",
   comparisonLabel = "Previous best",
 }) {
   const history = kind === "history";
-  const canvasRef = useRef(null);
-  const containerRef = useRef(null);
-  const points = samples.filter(
-    (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+  const points = useMemo(
+    () =>
+      samples.filter(
+        (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+      ),
+    [samples],
   );
-  const pbPoints = comparison.filter(
-    (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+  const pbPoints = useMemo(
+    () =>
+      comparison.filter(
+        (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+      ),
+    [comparison],
   );
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container || !points.length) return;
-    function draw() {
-      const width = container.clientWidth;
-      if (!width) return;
-      const height = 230;
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.round(width * dpr);
-      canvas.height = height * dpr;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const palette = getComputedStyle(document.documentElement);
-      const ink = palette.getPropertyValue("--ink").trim();
-      const muted = palette.getPropertyValue("--muted").trim();
-      const rule = palette.getPropertyValue("--rule").trim();
-      ctx.scale(dpr, dpr);
-      const pad = { left: 46, right: 24, top: 28, bottom: 36 };
-      const w = width - pad.left - pad.right;
-      const h = height - pad.top - pad.bottom;
-      const maxTime = Math.max(
-        1,
-        ...points.map((p) => p.second),
-        ...pbPoints.map((p) => p.second),
-      );
-      const maxWpm = Math.max(
-        20,
-        Math.ceil(
-          Math.max(...points.map((p) => p.net), ...pbPoints.map((p) => p.net)) /
-            20,
-        ) * 20,
-      );
-      const x = (second) => pad.left + (second / maxTime) * w;
-      const y = (value) => pad.top + h - (value / maxWpm) * h;
-      ctx.font = '14px "Space Mono", monospace';
-      ctx.fillStyle = muted;
-      ctx.textAlign = "right";
-      for (let i = 0; i <= 4; i++) {
-        const value = (maxWpm * i) / 4;
-        ctx.fillText(Math.round(value).toString(), pad.left - 10, y(value) + 4);
-        ctx.beginPath();
-        ctx.strokeStyle = rule;
-        ctx.lineWidth = 1;
-        ctx.moveTo(pad.left, y(value));
-        ctx.lineTo(width - pad.right, y(value));
-        ctx.stroke();
-      }
-      ctx.textAlign = "left";
-      ctx.fillText("WPM", 0, 13);
-      ctx.textAlign = "center";
-      if (history) {
-        const step = Math.max(1, Math.ceil(points.length / 5));
-        points.forEach((point, i) => {
-          if (i % step === 0 || i === points.length - 1)
-            ctx.fillText(point.label.slice(5), x(point.second), height - 10);
-        });
-      } else
-        for (let i = 0; i <= 4; i++) {
-          const second = (maxTime * i) / 4;
-          ctx.fillText(`${Number(second.toFixed(1))}s`, x(second), height - 10);
-        }
-      function line(series, dashed) {
-        if (!series.length) return;
-        ctx.beginPath();
-        ctx.strokeStyle = ink;
-        ctx.lineWidth = dashed ? 2 : 3;
-        ctx.setLineDash(dashed ? [6, 5] : []);
-        series.forEach((p, i) =>
-          i === 0
-            ? ctx.moveTo(x(p.second), y(p.net))
-            : ctx.lineTo(x(p.second), y(p.net)),
-        );
-        ctx.stroke();
-        ctx.setLineDash([]);
-        if (series.length === 1) {
-          ctx.fillStyle = ink;
-          ctx.fillRect(x(series[0].second) - 3, y(series[0].net) - 3, 6, 6);
-        }
-      }
-      line(pbPoints, true);
-      line(points, false);
-    }
-    draw();
-    document.fonts.ready.then(draw);
-    const observer = new ResizeObserver(draw);
-    observer.observe(container);
-    return () => observer.disconnect();
-  });
+  const data = useMemo(
+    () => ({
+      labels: history ? points.map((p) => p.label) : undefined,
+      datasets: [
+        ...(pbPoints.length
+          ? [
+              {
+                label: comparisonLabel,
+                data: pbPoints.map((p) => ({ x: p.second, y: p.net })),
+                borderDash: [6, 5],
+                borderWidth: 2,
+                pointRadius: pbPoints.length === 1 ? 3 : 0,
+              },
+            ]
+          : []),
+        {
+          label: history ? "Daily average" : "This run",
+          data: points.map((p) => ({ x: p.second, y: p.net })),
+          pointRadius: points.length === 1 || history ? 3 : 0,
+        },
+      ],
+    }),
+    [points, pbPoints, comparisonLabel, history],
+  );
+  const scales = useMemo(
+    () =>
+      chartScales(
+        {
+          type: "linear",
+          min: 0,
+          max: Math.max(
+            1,
+            ...points.map((p) => p.second),
+            ...pbPoints.map((p) => p.second),
+          ),
+          ticks: {
+            callback: (value) =>
+              history
+                ? points.find((p) => p.second === value)?.label?.slice(5) || ""
+                : `${Number(Number(value).toFixed(1))}s`,
+          },
+          ...(history
+            ? {
+                afterBuildTicks: (axis) => {
+                  const step = Math.max(1, Math.ceil(points.length / 5));
+                  axis.ticks = points
+                    .filter((_, i) => i % step === 0 || i === points.length - 1)
+                    .map((p) => ({ value: p.second }));
+                },
+              }
+            : {}),
+        },
+        Math.max(
+          20,
+          Math.ceil(
+            Math.max(
+              0,
+              ...points.map((p) => p.net),
+              ...pbPoints.map((p) => p.net),
+            ) / 20,
+          ) * 20,
+        ),
+      ),
+    [points, pbPoints, history],
+  );
+  const tooltip = useMemo(
+    () => ({
+      title: (items) =>
+        history
+          ? points.find((p) => p.second === items[0]?.parsed.x)?.label || ""
+          : `${Number(items[0]?.parsed.x.toFixed(2))}s`,
+      label: (item) => `${item.dataset.label}: ${item.parsed.y} WPM`,
+    }),
+    [points, history],
+  );
 
   if (!points.length)
     return (
@@ -130,13 +124,12 @@ export default function PaceChart({
           )}
         </div>
       </figcaption>
-      <div ref={containerRef}>
-        <canvas
-          ref={canvasRef}
-          role="img"
-          aria-label={`${label}. ${points.length} recorded ${history ? "days" : "intervals"}. Measurements are available below.`}
-        />
-      </div>
+      <LineChart
+        data={data}
+        scales={scales}
+        tooltip={tooltip}
+        label={`${label}. ${points.length} recorded ${history ? "days" : "intervals"}. Measurements are available below.`}
+      />
       <details className="sample-details">
         <summary>
           {history ? "View daily averages" : "View pace measurements"}
