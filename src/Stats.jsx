@@ -1,14 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase.js";
-import { formatMode, isCustomMode, loadHistory } from "./history.js";
+import { formatMode, loadHistory } from "./history.js";
 import PaceChart from "./PaceChart.jsx";
+import MissedKeysChart from "./MissedKeysChart.jsx";
+import RunTrends from "./RunTrends.jsx";
+import useRunHistory from "./useRunHistory.js";
+import { RUN_PAGE_SIZE } from "./cloudHistory.js";
 
 const fmtDate = (iso) =>
   new Date(iso).toLocaleString(undefined, {
+    year: "numeric",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 
 export default function Stats({
@@ -17,90 +23,108 @@ export default function Stats({
   onBack,
   freshRun,
   embedded = false,
+  cloudModes = [],
 }) {
   const [source, setSource] = useState("local");
-  const [cloudRuns, setCloudRuns] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [retry, setRetry] = useState(0);
-  const [selectedId, setSelectedId] = useState(null);
   const [mode, setMode] = useState("all");
-  const localRuns = useMemo(() => loadHistory(), [freshRun]);
-  const runs = source === "local" ? localRuns : cloudRuns;
-  const modes = [...new Set(runs.map((run) => run.mode))];
-  const filtered =
-    mode === "all" ? runs : runs.filter((run) => run.mode === mode);
-  const standard = filtered.filter((run) => !isCustomMode(run.mode));
-  const selected = filtered.find((run) => run.id === selectedId) || filtered[0];
-  const pbMap = {};
-  for (const run of standard)
-    if (!pbMap[run.mode] || run.wpm > pbMap[run.mode].wpm)
-      pbMap[run.mode] = run;
-  const byDay = {};
-  for (const run of standard.slice(0, 30).toReversed()) {
-    const date = run.created_at.slice(0, 10);
-    if (!byDay[date]) byDay[date] = [];
-    byDay[date].push(run.wpm);
-  }
-  const trend = Object.entries(byDay)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([label, values], index) => ({
-      second: index + 1,
-      net: Math.round(
-        values.reduce((sum, value) => sum + value, 0) / values.length,
+  const [discovered, setDiscovered] = useState({ account: null, modes: [] });
+  const detailHeading = useRef(null);
+  const focusDetail = useRef(false);
+  const localRuns = useMemo(
+    () =>
+      [...loadHistory()].sort(
+        (a, b) =>
+          b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id),
       ),
-      label,
-    }));
-
+    [freshRun],
+  );
+  const history = useRunHistory({
+    source,
+    userId: user?.id,
+    mode,
+    freshRun,
+    localRuns,
+  });
+  const modeKey = history.modes.join("|");
   useEffect(() => {
-    setCloudRuns([]);
-    setError("");
-    if (source !== "cloud" || !user || !supabase) {
-      setLoading(false);
-      return;
+    if (source !== "cloud" || !user?.id) return;
+    setDiscovered((previous) => ({
+      account: user.id,
+      modes: [
+        ...new Set([
+          ...(previous.account === user.id ? previous.modes : []),
+          ...history.modes,
+        ]),
+      ],
+    }));
+  }, [modeKey, source, user?.id]);
+  useEffect(() => {
+    if (focusDetail.current && history.selected) {
+      focusDetail.current = false;
+      detailHeading.current?.focus();
+      detailHeading.current?.scrollIntoView({ block: "nearest" });
     }
-    let active = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    setLoading(true);
-    supabase
-      .from("results")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(200)
-      .abortSignal(controller.signal)
-      .then(
-        ({ data, error: fetchError }) => {
-          clearTimeout(timeout);
-          if (!active) return;
-          if (fetchError)
-            setError(
-              "Cloud history could not load. Retry or view your local runs.",
-            );
-          else setCloudRuns(data || []);
-          setLoading(false);
-        },
-        () => {
-          clearTimeout(timeout);
-          if (!active) return;
-          setError(
-            "Cloud history could not load. Retry or view your local runs.",
-          );
-          setLoading(false);
-        },
-      );
-    return () => {
-      active = false;
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [source, user?.id, freshRun, retry]);
+  }, [history.selected?.id]);
 
+  const modes = [
+    ...new Set(
+      source === "local"
+        ? localRuns.map((run) => run.mode)
+        : [
+            ...cloudModes,
+            ...(discovered.account === user?.id ? discovered.modes : []),
+            ...history.modes,
+            ...(mode === "all" ? [] : [mode]),
+          ],
+    ),
+  ];
+  const recent = history.overview;
+  const daily = useMemo(() => {
+    const days = new Map();
+    for (const run of recent) {
+      const day = run.created_at.slice(0, 10);
+      const values = days.get(day) || [];
+      values.push(run.wpm);
+      days.set(day, values);
+    }
+    return [...days]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([label, values], index) => ({
+        label,
+        second: index + 1,
+        net: Math.round(
+          values.reduce((sum, value) => sum + value, 0) / values.length,
+        ),
+      }));
+  }, [recent]);
+  const bests = {};
+  for (const run of recent)
+    if (!bests[run.mode] || run.wpm > bests[run.mode].wpm)
+      bests[run.mode] = run;
+  const selectedIndex = history.rows.findIndex(
+    (run) => run.id === history.selected?.id,
+  );
+  function selectRun(run) {
+    history.select(run.id);
+    // Selecting the already active row still takes keyboard users to its charts.
+    requestAnimationFrame(() => {
+      detailHeading.current?.focus();
+      detailHeading.current?.scrollIntoView({ block: "nearest" });
+    });
+  }
+  function changePage(index, edge = "first") {
+    focusDetail.current = true;
+    history.pageTo(index, edge);
+  }
+  function adjacent(direction) {
+    const next = history.rows[selectedIndex + direction];
+    if (next) selectRun(next);
+    else changePage(history.page + direction, direction < 0 ? "last" : "first");
+  }
   function changeSource(next) {
+    focusDetail.current = false;
     setSource(next);
     setMode("all");
-    setSelectedId(null);
   }
 
   return (
@@ -114,7 +138,7 @@ export default function Stats({
           ) : (
             <h1 tabIndex={-1}>Your record.</h1>
           )}
-          <p>Find your pace. Pick a run to inspect it.</p>
+          <p>Browse your runs. Inspect your pace and missed keys.</p>
         </div>
         <button className="brutal-btn" onClick={onBack}>
           Back to typing
@@ -139,8 +163,8 @@ export default function Stats({
         </div>
         <p className="muted">
           {source === "local"
-            ? "Last 50 runs saved in this browser."
-            : "Latest 200 runs from your account."}
+            ? "Up to 50 runs retained in this browser."
+            : "Browse every cloud-saved run, newest first."}
         </p>
       </div>
       {source === "cloud" && !user ? (
@@ -154,167 +178,285 @@ export default function Stats({
             Log in
           </button>
         </section>
-      ) : loading ? (
-        <p className="state-panel" role="status">
-          Loading your cloud runs...
-        </p>
-      ) : error ? (
-        <section className="state-panel" role="alert">
-          <h2>History is unavailable.</h2>
-          <p>{error}</p>
-          <button className="brutal-btn" onClick={() => setRetry((n) => n + 1)}>
-            Retry cloud history
-          </button>
-        </section>
-      ) : runs.length === 0 ? (
-        <section className="state-panel">
-          <h2>No finished runs yet.</h2>
-          <p>Complete a typing test to see your scores and pace here.</p>
-          <button className="brutal-btn primary" onClick={onBack}>
-            Start a test
-          </button>
-        </section>
       ) : (
         <>
           <label className="mode-filter">
             Compare a mode
             <select
               value={mode}
-              onChange={(e) => {
-                setMode(e.target.value);
-                setSelectedId(null);
+              onChange={(event) => {
+                focusDetail.current = false;
+                setMode(event.target.value);
               }}
             >
               <option value="all">All modes</option>
-              {modes.map((m) => (
-                <option key={m} value={m}>
-                  {formatMode(m)}
+              {modes.map((value) => (
+                <option key={value} value={value}>
+                  {formatMode(value)}
                 </option>
               ))}
             </select>
           </label>
-          <dl className="history-summary">
-            <div>
-              <dt>Runs shown</dt>
-              <dd>{filtered.length}</dd>
-            </div>
-            <div>
-              <dt>Standard best WPM</dt>
-              <dd>
-                {standard.length
-                  ? Math.max(...standard.map((r) => r.wpm))
-                  : "None"}
-              </dd>
-            </div>
-            <div>
-              <dt>Standard average WPM</dt>
-              <dd>
-                {standard.length
-                  ? Math.round(
-                      standard.reduce((sum, r) => sum + r.wpm, 0) /
-                        standard.length,
-                    )
-                  : "None"}
-              </dd>
-            </div>
-          </dl>
-          <p className="muted">
-            Custom practice is excluded from standard records and daily
-            averages.
-          </p>
-          <section className="history-chart">
+          <section className="history-chart" aria-label="Recent-run overview">
             <div className="section-heading">
-              <h2>Daily average WPM</h2>
+              <h2>Recent-run trends</h2>
               <p>
-                Latest {Math.min(30, standard.length)} standard{" "}
-                {standard.length === 1 ? "run" : "runs"}. Dates use UTC.
+                Latest {recent.length} standard{" "}
+                {recent.length === 1 ? "run" : "runs"}
+                {mode === "all"
+                  ? " across all modes"
+                  : ` in ${formatMode(mode)}`}
+                . Custom practice is excluded. Browsing older pages does not
+                change these trends.
               </p>
             </div>
-            <PaceChart
-              samples={trend}
-              kind="history"
-              label={
-                trend.length
-                  ? `Daily average WPM: ${trend[0].label} to ${trend.at(-1).label} UTC`
-                  : "Daily average WPM"
-              }
-            />
+            {history.overviewLoading ? (
+              <p role="status" className="empty-copy">
+                Loading recent-run trends...
+              </p>
+            ) : history.overviewError ? (
+              <div role="alert">
+                <p>{history.overviewError}</p>
+                <button className="brutal-btn" onClick={history.retryOverview}>
+                  Retry recent-run trends
+                </button>
+              </div>
+            ) : (
+              <>
+                {recent.length > 0 && (
+                  <dl className="history-summary">
+                    <div>
+                      <dt>Recent standard runs</dt>
+                      <dd>{recent.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Best recent WPM</dt>
+                      <dd>{Math.max(...recent.map((run) => run.wpm))}</dd>
+                    </div>
+                    <div>
+                      <dt>Average recent WPM</dt>
+                      <dd>
+                        {Math.round(
+                          recent.reduce((sum, run) => sum + run.wpm, 0) /
+                            recent.length,
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+                <RunTrends runs={recent} />
+                {recent.length > 0 && (
+                  <>
+                    <PaceChart
+                      kind="history"
+                      samples={daily}
+                      label={`Daily average WPM: ${daily[0]?.label} to ${daily.at(-1)?.label} UTC`}
+                    />
+                    <details className="sample-details">
+                      <summary>
+                        View best scores by mode in these recent runs
+                      </summary>
+                      <div className="best-list">
+                        {Object.values(bests).map((run) => (
+                          <div key={run.mode}>
+                            <span>{formatMode(run.mode)}</span>
+                            <strong>
+                              {run.wpm} <small>WPM</small>
+                            </strong>
+                            <span>{run.acc}% accuracy</span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  </>
+                )}
+              </>
+            )}
           </section>
-          {selected && (
-            <section className="history-chart">
+          {history.selected && (
+            <section
+              className="history-chart run-detail"
+              aria-labelledby="run-detail-heading"
+            >
               <div className="section-heading">
-                <h2>WPM during this run</h2>
+                <h2 id="run-detail-heading" ref={detailHeading} tabIndex={-1}>
+                  Charts for this run
+                </h2>
                 <p>
-                  {formatMode(selected.mode)} / {fmtDate(selected.created_at)}
+                  {formatMode(history.selected.mode)} /{" "}
+                  {fmtDate(history.selected.created_at)}
                 </p>
               </div>
-              <PaceChart
-                samples={selected.samples || []}
-                label={`${selected.wpm} WPM / ${selected.acc}% accuracy`}
-              />
+              <p className="run-score" role="status">
+                {history.selected.wpm} WPM / {history.selected.acc}% accuracy
+              </p>
+              <div
+                className="run-pagination"
+                role="group"
+                aria-label="Browse individual runs"
+              >
+                <button
+                  className="brutal-btn"
+                  disabled={
+                    history.loading ||
+                    (selectedIndex === 0 && history.page === 0)
+                  }
+                  onClick={() => adjacent(-1)}
+                >
+                  Previous run
+                </button>
+                <button
+                  className="brutal-btn"
+                  disabled={
+                    history.loading ||
+                    (selectedIndex === history.rows.length - 1 &&
+                      !history.hasMore)
+                  }
+                  onClick={() => adjacent(1)}
+                >
+                  Next run
+                </button>
+              </div>
+              {history.detailLoading ? (
+                <p className="empty-copy" role="status">
+                  Loading charts for this run...
+                </p>
+              ) : history.detailError ? (
+                <div role="alert">
+                  <p>{history.detailError}</p>
+                  <button className="brutal-btn" onClick={history.retryDetails}>
+                    Retry run charts
+                  </button>
+                </div>
+              ) : (
+                history.details && (
+                  <>
+                    <PaceChart
+                      samples={
+                        Array.isArray(history.details.samples)
+                          ? history.details.samples
+                          : []
+                      }
+                      showRaw
+                      label="Net and raw WPM during this run"
+                    />
+                    <MissedKeysChart missed={history.details.missed_keys} />
+                  </>
+                )
+              )}
             </section>
           )}
-          <section>
+          <section className="run-browser" aria-label="Saved run browser">
             <div className="section-heading">
-              <h2>Best by mode</h2>
-              <span className="muted">Within this history</span>
+              <h2>Saved runs</h2>
+              <p>20 runs per page. Choose a run to view its charts above.</p>
             </div>
-            <div className="best-list">
-              {Object.values(pbMap).map((r) => (
-                <div key={r.mode}>
-                  <span>{formatMode(r.mode)}</span>
-                  <strong>
-                    {r.wpm} <small>WPM</small>
-                  </strong>
-                  <span>{r.acc}% accuracy</span>
-                </div>
-              ))}
-            </div>
-          </section>
-          <section>
-            <div className="section-heading">
-              <h2>Last 10 runs</h2>
-              <span className="muted">Choose a score for its pace curve.</span>
-            </div>
-            <div
-              className="table-scroll"
-              tabIndex={0}
-              role="region"
-              aria-label="Recent runs"
-            >
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">WPM</th>
-                    <th scope="col">Accuracy</th>
-                    <th scope="col">Mode</th>
-                    <th scope="col">Finished</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.slice(0, 10).map((r) => (
-                    <tr
-                      key={r.id}
-                      className={selected?.id === r.id ? "selected-row" : ""}
-                    >
-                      <td>
-                        <button
-                          className="score-link"
-                          aria-pressed={selected?.id === r.id}
-                          aria-label={`View ${r.wpm} WPM run from ${fmtDate(r.created_at)}`}
-                          onClick={() => setSelectedId(r.id)}
+            {history.loading && <p role="status">Loading cloud runs...</p>}
+            {history.pageError && (
+              <div role="alert">
+                <p>{history.pageError}</p>
+                <button
+                  className="brutal-btn"
+                  onClick={() => {
+                    focusDetail.current = true;
+                    history.retryPage();
+                  }}
+                >
+                  Retry cloud history
+                </button>
+              </div>
+            )}
+            {!history.loading && !history.pageError && !history.rows.length && (
+              <div className="state-panel">
+                <h3>
+                  {mode === "all"
+                    ? "No finished runs yet."
+                    : "No saved runs in this mode."}
+                </h3>
+                <p>
+                  {mode === "all"
+                    ? "Complete a typing test to see its scores and charts here."
+                    : "Choose another mode or complete a test in this mode."}
+                </p>
+                <button className="brutal-btn" onClick={onBack}>
+                  Start a test
+                </button>
+              </div>
+            )}
+            {history.rows.length > 0 && (
+              <>
+                <div
+                  className="table-scroll"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Saved runs"
+                >
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Finished</th>
+                        <th scope="col">Mode</th>
+                        <th scope="col">WPM</th>
+                        <th scope="col">Accuracy</th>
+                        <th scope="col">Charts</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.rows.map((run) => (
+                        <tr
+                          key={run.id}
+                          className={
+                            history.selected?.id === run.id
+                              ? "selected-row"
+                              : ""
+                          }
                         >
-                          {r.wpm}
-                        </button>
-                      </td>
-                      <td>{r.acc}%</td>
-                      <td>{formatMode(r.mode)}</td>
-                      <td>{fmtDate(r.created_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                          <td>{fmtDate(run.created_at)}</td>
+                          <td>{formatMode(run.mode)}</td>
+                          <td>{run.wpm}</td>
+                          <td>{run.acc}%</td>
+                          <td>
+                            <button
+                              className="score-link"
+                              aria-pressed={history.selected?.id === run.id}
+                              aria-label={`View charts for ${run.wpm} WPM run from ${fmtDate(run.created_at)}`}
+                              onClick={() => selectRun(run)}
+                            >
+                              View charts
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div
+                  className="run-pagination"
+                  role="group"
+                  aria-label="Run history pages"
+                >
+                  <button
+                    className="brutal-btn"
+                    disabled={history.loading || history.page === 0}
+                    onClick={() => changePage(history.page - 1)}
+                  >
+                    Previous page
+                  </button>
+                  <p role="status">
+                    Page {history.page + 1} / Runs{" "}
+                    {history.page * RUN_PAGE_SIZE + 1}–
+                    {history.page * RUN_PAGE_SIZE + history.rows.length}
+                  </p>
+                  <button
+                    className="brutal-btn"
+                    disabled={history.loading || !history.hasMore}
+                    onClick={() => changePage(history.page + 1)}
+                  >
+                    Next page
+                  </button>
+                </div>
+              </>
+            )}
           </section>
         </>
       )}

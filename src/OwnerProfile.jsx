@@ -55,7 +55,13 @@ export default function OwnerProfile({
         ) : null}
         {controls}
       </ProfileLedger>
-      <Stats user={user} onBack={onBack} freshRun={freshRun} embedded />
+      <Stats
+        user={user}
+        onBack={onBack}
+        freshRun={freshRun}
+        cloudModes={(profile.personal_bests || []).map((record) => record.mode)}
+        embedded
+      />
     </div>
   );
 }

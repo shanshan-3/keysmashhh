@@ -7,6 +7,8 @@ import {
   CategoryScale,
   LinearScale,
   Tooltip,
+  BarController,
+  BarElement,
 } from "chart.js";
 
 Chart.register(
@@ -16,6 +18,8 @@ Chart.register(
   CategoryScale,
   LinearScale,
   Tooltip,
+  BarController,
+  BarElement,
 );
 
 export default function LineChart({
@@ -25,6 +29,8 @@ export default function LineChart({
   label,
   height = 230,
   className = "",
+  type = "line",
+  indexAxis = "x",
 }) {
   const canvas = useRef(null);
   const instance = useRef(null);
@@ -38,11 +44,12 @@ export default function LineChart({
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const font = { family: '"Space Mono", monospace', size: 12 };
     const chart = new Chart(canvas.current, {
-      type: "line",
+      type,
       data: current.current.data,
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        indexAxis,
         animation: motion.matches
           ? false
           : { duration: 450, easing: "easeOutQuart" },
@@ -110,7 +117,7 @@ export default function LineChart({
       chart.destroy();
       instance.current = null;
     };
-  }, []);
+  }, [type, indexAxis]);
 
   useEffect(() => {
     const chart = instance.current;
@@ -137,7 +144,7 @@ export default function LineChart({
   );
 }
 
-export function chartScales(x, max) {
+export function chartScales(x, max, unit = "WPM") {
   const palette = getComputedStyle(document.documentElement);
   const muted = palette.getPropertyValue("--muted").trim();
   const rule = palette.getPropertyValue("--rule").trim();
@@ -162,7 +169,7 @@ export function chartScales(x, max) {
       border: { display: false },
       grid: { color: rule },
       ticks: { color: muted, font, maxTicksLimit: 5 },
-      title: { display: true, text: "WPM", color: muted, font },
+      title: { display: true, text: unit, color: muted, font },
     },
   };
 }

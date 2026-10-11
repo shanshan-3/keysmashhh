@@ -1,7 +1,7 @@
-import { rankMissed } from "./engine.js";
 import { ghostOutcome, ghostPace } from "./ghosts.js";
 import { formatMode } from "./history.js";
 import PaceChart from "./PaceChart.jsx";
+import MissedKeysChart from "./MissedKeysChart.jsx";
 
 export default function RunResults({
   ref,
@@ -16,7 +16,6 @@ export default function RunResults({
   onBack,
   onHistory,
 }) {
-  const missed = rankMissed(result.missed_keys);
   return (
     <section
       className="results"
@@ -65,6 +64,7 @@ export default function RunResults({
       </div>
       <PaceChart
         samples={result.samples}
+        showRaw
         comparison={ghost ? ghostPace(ghost) : result.previous?.samples || []}
         comparisonLabel={ghost ? "Challenged ghost" : "Previous best"}
       />
@@ -93,23 +93,7 @@ export default function RunResults({
           <dd>{Number(result.elapsed_s.toFixed(2))}s</dd>
         </div>
       </dl>
-      <div className="missed-keys">
-        <h3>Missed keys</h3>
-        {missed.length ? (
-          <ul>
-            {missed.map(([key, count]) => (
-              <li key={key}>
-                <kbd>{key}</kbd>
-                <span>
-                  {count} {count === 1 ? "miss" : "misses"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No missed keys in this run.</p>
-        )}
-      </div>
+      <MissedKeysChart missed={result.missed_keys} />
       <div className="result-actions">
         <button className="brutal-btn primary" onClick={() => onRestart()}>
           {ghost ? "Rematch" : "Type again"} <kbd>Tab</kbd>

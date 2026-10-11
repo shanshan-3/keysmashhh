@@ -9,45 +9,90 @@ export default function PaceChart({
   label = "WPM over time",
   kind = "pace",
   comparisonLabel = "Previous best",
+  showRaw = false,
 }) {
   const history = kind === "history";
   const points = useMemo(
     () =>
-      samples.filter(
-        (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+      (Array.isArray(samples) ? samples : EMPTY).filter((s) =>
+        Number.isFinite(s?.second),
       ),
     [samples],
   );
   const pbPoints = useMemo(
     () =>
-      comparison.filter(
-        (s) => Number.isFinite(s.second) && Number.isFinite(s.net),
+      (Array.isArray(comparison) ? comparison : EMPTY).filter((s) =>
+        Number.isFinite(s?.second),
       ),
     [comparison],
   );
+  const hasRaw =
+    showRaw && !history && points.some((point) => Number.isFinite(point.raw));
   const data = useMemo(
     () => ({
       labels: history ? points.map((p) => p.label) : undefined,
       datasets: [
+        ...(hasRaw
+          ? [
+              {
+                label: "Raw WPM",
+                data: points.map((p) => ({
+                  x: p.second,
+                  y: Number.isFinite(p.raw) ? p.raw : null,
+                })),
+                borderDash: [2, 3],
+                borderWidth: 2,
+                pointRadius: points.map((point, index) =>
+                  Number.isFinite(point.raw) &&
+                  !Number.isFinite(points[index - 1]?.raw) &&
+                  !Number.isFinite(points[index + 1]?.raw)
+                    ? 3
+                    : 0,
+                ),
+                spanGaps: false,
+              },
+            ]
+          : []),
         ...(pbPoints.length
           ? [
               {
                 label: comparisonLabel,
-                data: pbPoints.map((p) => ({ x: p.second, y: p.net })),
+                data: pbPoints.map((p) => ({
+                  x: p.second,
+                  y: Number.isFinite(p.net) ? p.net : null,
+                })),
                 borderDash: [6, 5],
                 borderWidth: 2,
-                pointRadius: pbPoints.length === 1 ? 3 : 0,
+                pointRadius: pbPoints.map((point, index) =>
+                  Number.isFinite(point.net) &&
+                  !Number.isFinite(pbPoints[index - 1]?.net) &&
+                  !Number.isFinite(pbPoints[index + 1]?.net)
+                    ? 3
+                    : 0,
+                ),
               },
             ]
           : []),
         {
-          label: history ? "Daily average" : "This run",
-          data: points.map((p) => ({ x: p.second, y: p.net })),
-          pointRadius: points.length === 1 || history ? 3 : 0,
+          label: history ? "Daily average" : showRaw ? "Net WPM" : "This run",
+          data: points.map((p) => ({
+            x: p.second,
+            y: Number.isFinite(p.net) ? p.net : null,
+          })),
+          spanGaps: false,
+          pointRadius: history
+            ? 3
+            : points.map((point, index) =>
+                Number.isFinite(point.net) &&
+                !Number.isFinite(points[index - 1]?.net) &&
+                !Number.isFinite(points[index + 1]?.net)
+                  ? 3
+                  : 0,
+              ),
         },
       ],
     }),
-    [points, pbPoints, comparisonLabel, history],
+    [points, pbPoints, comparisonLabel, history, hasRaw, showRaw],
   );
   const scales = useMemo(
     () =>
@@ -82,13 +127,16 @@ export default function PaceChart({
           Math.ceil(
             Math.max(
               0,
-              ...points.map((p) => p.net),
-              ...pbPoints.map((p) => p.net),
+              ...points.map((p) => (Number.isFinite(p.net) ? p.net : 0)),
+              ...pbPoints.map((p) => (Number.isFinite(p.net) ? p.net : 0)),
+              ...(hasRaw
+                ? points.filter((p) => Number.isFinite(p.raw)).map((p) => p.raw)
+                : []),
             ) / 20,
           ) * 20,
         ),
       ),
-    [points, pbPoints, history],
+    [points, pbPoints, history, hasRaw],
   );
   const tooltip = useMemo(
     () => ({
@@ -115,8 +163,13 @@ export default function PaceChart({
         <h3>{label}</h3>
         <div className="chart-legend">
           <span>
-            <i /> {history ? "Daily average" : "This run"}
+            <i /> {history ? "Daily average" : showRaw ? "Net WPM" : "This run"}
           </span>
+          {hasRaw && (
+            <span>
+              <i className="dotted" /> Raw WPM
+            </span>
+          )}
           {pbPoints.length > 0 && (
             <span>
               <i className="dashed" /> {comparisonLabel}
@@ -130,6 +183,9 @@ export default function PaceChart({
         tooltip={tooltip}
         label={`${label}. ${points.length} recorded ${history ? "days" : "intervals"}. Measurements are available below.`}
       />
+      {showRaw && !history && !hasRaw && (
+        <p className="muted">Raw WPM samples are unavailable for this run.</p>
+      )}
       <details className="sample-details">
         <summary>
           {history ? "View daily averages" : "View pace measurements"}
@@ -152,8 +208,10 @@ export default function PaceChart({
               {points.map((p) => (
                 <tr key={p.second}>
                   <td>{history ? p.label : Number(p.second.toFixed(2))}</td>
-                  <td>{p.net}</td>
-                  {!history && <td>{p.raw}</td>}
+                  <td>{Number.isFinite(p.net) ? p.net : "Unavailable"}</td>
+                  {!history && (
+                    <td>{Number.isFinite(p.raw) ? p.raw : "Unavailable"}</td>
+                  )}
                 </tr>
               ))}
             </tbody>
