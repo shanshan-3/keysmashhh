@@ -1660,10 +1660,10 @@ td:first-child {
 }
 
 /* Entrances mark navigation and completed actions, keeping active typing steady. */
-@keyframes page-enter {
+@keyframes section-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -1680,11 +1680,70 @@ td:first-child {
     transform: translateY(0);
   }
 }
-.page-enter {
-  animation: page-enter 180ms ease-out;
+.app-main
+  :is(
+    .page-heading,
+    .test-heading,
+    .test-settings,
+    .profile-totals,
+    .profile-records,
+    .profile-improvement,
+    .profile-activity,
+    .history-toolbar,
+    .history-summary,
+    .stats-page > section,
+    .results > .result-heading,
+    .results > .ghost-result,
+    .results > .result-hero,
+    .results > .pace-chart,
+    .results > .result-details,
+    .results > .missed-keys,
+    .results > .result-actions,
+    .results > .result-meta
+  ) {
+  animation: section-enter 350ms ease-out backwards;
+  animation-delay: var(--entrance-delay, 0ms);
 }
-.results {
-  animation: page-enter 220ms ease-out;
+.test-settings,
+.profile-totals,
+.history-toolbar,
+.result-hero {
+  --entrance-delay: 60ms;
+}
+.profile-records,
+.history-summary,
+.ghost-result,
+.results > .pace-chart {
+  --entrance-delay: 120ms;
+}
+.profile-improvement,
+.stats-page > .history-chart,
+.result-details {
+  --entrance-delay: 180ms;
+}
+.profile-activity,
+.stats-page > section:not(.history-chart),
+.missed-keys,
+.result-actions,
+.result-meta {
+  --entrance-delay: 240ms;
+}
+/* A focused control stays visible even during its section's entrance delay. */
+.app-main
+  :is(
+    .page-heading,
+    .test-heading,
+    .test-settings,
+    .profile-records,
+    .profile-improvement,
+    .profile-activity,
+    .history-toolbar,
+    .stats-page > section,
+    .results > .pace-chart,
+    .results > .result-actions
+  ):focus-within {
+  opacity: 1 !important;
+  transform: none !important;
 }
 .account-menu-items,
 .mobile-nav-panel,

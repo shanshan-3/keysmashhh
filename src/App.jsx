@@ -683,7 +683,7 @@ export default function App() {
         }}
         onLogout={logout}
       />
-      <main id="main" className="app-main page-enter" key={page} tabIndex={-1}>
+      <main id="main" className="app-main" key={page} tabIndex={-1}>
         {page === "owner" ? (
           <OwnerProfile
             key={user.id}
